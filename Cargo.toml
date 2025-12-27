@@ -8,5 +8,5 @@ wgpu = "28.0.0"
 winit = "0.30.12"
 bytemuck = "1.24.0"
 nalgebra = "0.34.1"
-pollster = "0.4.0"
+tokio = { version = "1.48.0", features = ["rt"] }
  

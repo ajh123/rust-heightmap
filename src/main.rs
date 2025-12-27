@@ -122,7 +122,6 @@ impl Camera {
 }
 
 struct State {
-    window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -307,7 +306,6 @@ impl State {
         let camera = Camera::new(aspect);
 
         Self {
-            window,
             surface,
             device,
             queue,
@@ -399,7 +397,7 @@ impl ApplicationHandler for App {
         
         let window = event_loop.create_window(window_attributes).unwrap();
         
-        let state = pollster::block_on(State::new(window));
+        let state = block_on(State::new(window));
         self.state = Some(state);
     }
 
@@ -454,6 +452,14 @@ impl ApplicationHandler for App {
             state.render();
         }
     }
+}
+
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(future)
 }
 
 fn main() {
