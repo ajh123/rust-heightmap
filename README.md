@@ -10,6 +10,9 @@ The first pass was implemented in two stages:
 
 This first pass was implemented with the GLM-4.7 assistant on OpenCode in roughly one hour, *(see conversation: https://opncd.ai/share/HhULZY4C)*
 
+![](./docs/Screenshot%202025-12-27%20123805.png)
+*Screenshot of the heightmap renderer in action.*
+
 ## Features
 
 - Renders a flat plane divided into chunks.
