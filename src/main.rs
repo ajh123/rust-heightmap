@@ -15,19 +15,43 @@ use std::sync::Arc;
 const SHADER: &str = r#"
 struct Uniforms {
     mvp: mat4x4<f32>,
+    light_direction: vec4<f32>,
+    light_color: vec4<f32>,
+    camera_position: vec4<f32>,
+    light_params: vec2<f32>,
+}
+
+struct PointLight {
+    position: vec4<f32>,
+    color_intensity: vec4<f32>,
+    radius: f32,
 }
 
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
 
+@group(0) @binding(1)
+var<storage, read> point_lights: array<PointLight>;
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) color: vec3<f32>,
+    @location(2) normal: vec3<f32>,
+    @location(3) metallic: f32,
+    @location(4) roughness: f32,
+    @location(5) ao: f32,
+    @location(6) subsurface: f32,
 }
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec3<f32>,
+    @location(0) world_position: vec3<f32>,
+    @location(1) color: vec3<f32>,
+    @location(2) normal: vec3<f32>,
+    @location(3) metallic: f32,
+    @location(4) roughness: f32,
+    @location(5) ao: f32,
+    @location(6) subsurface: f32,
 }
 
 @vertex
@@ -36,13 +60,145 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
     out.clip_position = uniforms.mvp * vec4<f32>(model.position, 1.0);
+    out.world_position = model.position;
     out.color = model.color;
+    out.normal = normalize(model.normal);
+    out.metallic = model.metallic;
+    out.roughness = model.roughness;
+    out.ao = model.ao;
+    out.subsurface = model.subsurface;
     return out;
+}
+
+fn distribution_ggx(N: vec3<f32>, H: vec3<f32>, roughness: f32) -> f32 {
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let NdotH = max(dot(N, H), 0.0);
+    let NdotH2 = NdotH * NdotH;
+
+    let num = a2;
+    var denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = 3.14159265 * denom * denom;
+
+    return num / denom;
+}
+
+fn geometry_schlick_ggx(NdotV: f32, roughness: f32) -> f32 {
+    let r = (roughness + 1.0);
+    let k = (r * r) / 8.0;
+
+    let num = NdotV;
+    let denom = NdotV * (1.0 - k) + k;
+
+    return num / denom;
+}
+
+fn geometry_smith(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, roughness: f32) -> f32 {
+    let NdotV = max(dot(N, V), 0.0);
+    let NdotL = max(dot(N, L), 0.0);
+    let ggx2 = geometry_schlick_ggx(NdotV, roughness);
+    let ggx1 = geometry_schlick_ggx(NdotL, roughness);
+
+    return ggx1 * ggx2;
+}
+
+fn fresnel_schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+fn calculate_point_light(world_pos: vec3<f32>, light: PointLight,
+                        N: vec3<f32>, V: vec3<f32>, F0: vec3<f32>, albedo: vec3<f32>,
+                        metallic: f32, roughness: f32, sss: f32) -> vec3<f32> {
+    let L_dir = light.position.xyz - world_pos;
+    let distance = length(L_dir);
+
+    if (distance > light.radius) {
+        return vec3<f32>(0.0);
+    }
+
+    let L_norm = normalize(L_dir);
+    let H_norm = normalize(V + L_norm);
+
+    let attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * distance * distance);
+    var volumetric = 1.0 - (distance / light.radius);
+    volumetric = pow(volumetric, 2.0);
+
+    let L_color = light.color_intensity.xyz;
+    let L_intensity = light.color_intensity.w;
+
+    let radiance = L_color * L_intensity * attenuation;
+
+    let F = fresnel_schlick(max(dot(H_norm, V), 0.0), F0);
+    let NDF = distribution_ggx(N, H_norm, roughness);
+    let G = geometry_smith(N, V, L_norm, roughness);
+
+    let numerator = NDF * G * F;
+    let denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L_norm), 0.0) + 0.0001;
+    let specular = numerator / denominator;
+
+    let kS = F;
+    var kD = vec3<f32>(1.0) - kS;
+    kD *= 1.0 - metallic;
+
+    let NdotL = max(dot(N, L_norm), 0.0);
+
+    var indirect = vec3<f32>(0.0);
+    if (sss > 0.01 && NdotL < 0.0) {
+        indirect = L_color * L_intensity * attenuation * sss * 0.3 * abs(NdotL);
+    }
+
+    let direct = (kD * albedo / 3.14159265 + specular) * radiance * NdotL * volumetric;
+
+    return direct + indirect;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color, 1.0);
+    let N = normalize(in.normal);
+    let V = normalize(uniforms.camera_position.xyz - in.world_position);
+    
+    let sun_dir = normalize(uniforms.light_direction.xyz);
+    let H_sun = normalize(V + sun_dir);
+    
+    let F0 = mix(vec3<f32>(0.04), in.color, in.metallic);
+    
+    var Lo = vec3<f32>(0.0);
+    
+    let radiance_sun = uniforms.light_color.xyz * 1.0;
+    let F_sun = fresnel_schlick(max(dot(H_sun, V), 0.0), F0);
+    let NDF_sun = distribution_ggx(N, H_sun, in.roughness);
+    let G_sun = geometry_smith(N, V, sun_dir, in.roughness);
+    
+    let numerator_sun = NDF_sun * G_sun * F_sun;
+    let denominator_sun = 4.0 * max(dot(N, V), 0.0) * max(dot(N, sun_dir), 0.0) + 0.0001;
+    let specular_sun = numerator_sun / denominator_sun;
+    
+    let kS_sun = F_sun;
+    var kD_sun = vec3<f32>(1.0) - kS_sun;
+    kD_sun *= 1.0 - in.metallic;
+    
+    let NdotL_sun = max(dot(N, sun_dir), 0.0);
+    let direct_sun = (kD_sun * in.color / 3.14159265 + specular_sun) * radiance_sun * NdotL_sun;
+    
+    var indirect_sun = vec3<f32>(0.0);
+    if (in.subsurface > 0.01 && NdotL_sun < 0.0) {
+        indirect_sun = uniforms.light_color.xyz * 0.2 * in.subsurface * abs(NdotL_sun);
+    }
+    
+    Lo = direct_sun + indirect_sun;
+    
+    for (var i: u32 = 0u; i < u32(uniforms.light_params.y); i = i + 1u) {
+        let light = point_lights[i];
+        Lo += calculate_point_light(
+            in.world_position, light,
+            N, V, F0, in.color, in.metallic, in.roughness, in.subsurface
+        );
+    }
+    
+    let ambient = vec3<f32>(uniforms.light_params.x * 0.05) * in.color * in.ao;
+    let color = ambient + Lo;
+    
+    return vec4<f32>(color, 1.0);
 }
 "#;
 
@@ -125,6 +281,17 @@ impl Camera {
     }
 }
 
+#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
+#[repr(C)]
+struct LightUniforms {
+    mvp: [f32; 16],
+    light_direction: [f32; 4],
+    light_color: [f32; 4],
+    camera_position: [f32; 4],
+    light_params: [f32; 2],
+    _padding: [f32; 2],
+}
+
 struct State {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -132,7 +299,6 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
     camera: Camera,
     world: world::World,
     world_renderer: world_renderer::WorldRenderer,
@@ -195,38 +361,26 @@ impl State {
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
 
+        let light_uniforms = LightUniforms {
+            mvp: [0f32; 16],
+            light_direction: [0.5, 0.8, 0.3, 0.0],
+            light_color: [1.0, 0.95, 0.9, 0.0],
+            camera_position: [0.0, 15.0, 0.0, 0.0],
+            light_params: [0.3, 0.0],
+            _padding: [0.0, 0.0],
+        };
+
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Uniform Buffer"),
-            contents: bytemuck::cast_slice(&[0f32; 16]),
+            contents: bytemuck::cast_slice(&[light_uniforms]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Bind Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
+        let world_renderer = world_renderer::WorldRenderer::new(&device, &uniform_buffer);
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[world_renderer.bind_group_layout()],
             immediate_size: 0,
         });
 
@@ -237,7 +391,7 @@ impl State {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<[f32; 6]>() as wgpu::BufferAddress,
+                    array_stride: std::mem::size_of::<[f32; 13]>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[
                         wgpu::VertexAttribute {
@@ -249,6 +403,31 @@ impl State {
                             offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                             shader_location: 1,
                             format: wgpu::VertexFormat::Float32x3,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: (std::mem::size_of::<[f32; 3]>() * 2) as wgpu::BufferAddress,
+                            shader_location: 2,
+                            format: wgpu::VertexFormat::Float32x3,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: (std::mem::size_of::<[f32; 3]>() * 3) as wgpu::BufferAddress,
+                            shader_location: 3,
+                            format: wgpu::VertexFormat::Float32,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: (std::mem::size_of::<[f32; 3]>() * 3 + std::mem::size_of::<f32>()) as wgpu::BufferAddress,
+                            shader_location: 4,
+                            format: wgpu::VertexFormat::Float32,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: (std::mem::size_of::<[f32; 3]>() * 3 + std::mem::size_of::<f32>() * 2) as wgpu::BufferAddress,
+                            shader_location: 5,
+                            format: wgpu::VertexFormat::Float32,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: (std::mem::size_of::<[f32; 3]>() * 3 + std::mem::size_of::<f32>() * 3) as wgpu::BufferAddress,
+                            shader_location: 6,
+                            format: wgpu::VertexFormat::Float32,
                         },
                     ],
                 }],
@@ -295,8 +474,6 @@ impl State {
         let mut world = world::World::new(terrain_generator);
         world.update(camera.position.x, camera.position.z, 4);
 
-        let world_renderer = world_renderer::WorldRenderer::new();
-
         Self {
             surface,
             device,
@@ -304,7 +481,6 @@ impl State {
             config,
             pipeline,
             uniform_buffer,
-            bind_group,
             camera,
             world,
             world_renderer,
@@ -323,7 +499,19 @@ impl State {
 
         {
             let mvp = self.camera.mvp_matrix();
-            self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&mvp));
+            let camera_pos = [self.camera.position.x, self.camera.position.y, self.camera.position.z];
+            let num_lights = self.world.lights.len() as u32;
+            
+            let light_uniforms = LightUniforms {
+                mvp,
+                light_direction: [0.5, 0.8, 0.3, 0.0],
+                light_color: [1.0, 0.95, 0.9, 0.0],
+                camera_position: [camera_pos[0], camera_pos[1], camera_pos[2], 0.0],
+                light_params: [0.3, num_lights as f32],
+                _padding: [0.0, 0.0],
+            };
+            self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[light_uniforms]));
+            self.world_renderer.update_lights(&self.queue, &self.world.lights);
 
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -348,7 +536,6 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_bind_group(0, &self.bind_group, &[]);
             self.world_renderer.render(&mut render_pass);
         }
 

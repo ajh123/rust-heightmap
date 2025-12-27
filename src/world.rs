@@ -3,6 +3,14 @@ use crate::terrain_generator::TerrainGenerator;
 
 pub const CHUNK_SIZE: usize = 20;
 
+#[derive(Clone, Copy)]
+pub struct LightSource {
+    pub position: [f32; 3],
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub radius: f32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ChunkKey {
     pub x: i32,
@@ -23,13 +31,65 @@ impl ChunkKey {
 
 pub struct Chunk {
     pub heights: Vec<f32>,
+    pub metallic: Vec<f32>,
+    pub roughness: Vec<f32>,
+    pub ao: Vec<f32>,
+    pub subsurface: Vec<f32>,
     pub dirty: bool,
 }
 
 impl Chunk {
     pub fn new(terrain_generator: &dyn TerrainGenerator, key: ChunkKey) -> Self {
+        let heights = terrain_generator.generate_chunk(key.x, key.z);
+        let vertex_count = (CHUNK_SIZE + 1) * (CHUNK_SIZE + 1);
+        let mut metallic = Vec::with_capacity(vertex_count);
+        let mut roughness = Vec::with_capacity(vertex_count);
+        let mut ao = Vec::with_capacity(vertex_count);
+        let mut subsurface = Vec::with_capacity(vertex_count);
+
+        for i in 0..vertex_count {
+            let height = heights[i];
+            let (ix, iz) = Chunk::get_grid_position(i);
+
+            let m = 0.02;
+
+            let r = if height > 5.0 { 0.75 }
+                else if height > 3.0 { 0.85 }
+                else if height < 1.0 { 0.7 }
+                else { 0.92 };
+
+            let sss = if height > 5.0 { 0.05 }
+                else if height > 3.0 { 0.15 }
+                else if height < 1.0 { 0.1 }
+                else { 0.35 };
+
+            let local_slope = {
+                let h_center = height;
+                let h_left = if ix > 0 { heights[iz * (CHUNK_SIZE + 1) + (ix - 1)] } else { h_center };
+                let h_right = if ix < CHUNK_SIZE { heights[iz * (CHUNK_SIZE + 1) + (ix + 1)] } else { h_center };
+                let h_up = if iz > 0 { heights[(iz - 1) * (CHUNK_SIZE + 1) + ix] } else { h_center };
+                let h_down = if iz < CHUNK_SIZE { heights[(iz + 1) * (CHUNK_SIZE + 1) + ix] } else { h_center };
+                let dx = (h_right - h_left).abs();
+                let dz = (h_down - h_up).abs();
+                (dx + dz) / 2.0
+            };
+
+            let height_factor = 1.0 - (height / 10.0).clamp(0.0, 1.0);
+            let slope_factor = local_slope.clamp(0.0, 1.0);
+            let ao_value = 1.0 - (height_factor * 0.3 + slope_factor * 0.4);
+
+            metallic.push(m);
+            roughness.push(r);
+            ao.push(ao_value);
+            subsurface.push(sss);
+        }
+
         Self {
-            heights: terrain_generator.generate_chunk(key.x, key.z),
+            heights,
+            metallic,
+            roughness,
+            ao,
+            subsurface,
             dirty: true,
         }
     }
@@ -65,6 +125,7 @@ impl Chunk {
 
 pub struct World {
     pub chunks: HashMap<ChunkKey, Chunk>,
+    pub lights: Vec<LightSource>,
     terrain_generator: Box<dyn TerrainGenerator>,
 }
 
@@ -72,6 +133,7 @@ impl World {
     pub fn new(terrain_generator: Box<dyn TerrainGenerator>) -> Self {
         Self {
             chunks: HashMap::new(),
+            lights: Vec::new(),
             terrain_generator,
         }
     }
