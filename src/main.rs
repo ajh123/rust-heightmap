@@ -377,7 +377,7 @@ struct App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window_attributes = Window::default_attributes()
-            .with_title("3D Plane with Pan")
+            .with_title("Rust Heightmap Viewer")
             .with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0));
         
         let window = event_loop.create_window(window_attributes).unwrap();
