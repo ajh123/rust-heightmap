@@ -286,7 +286,12 @@ impl State {
         let aspect = config.width as f32 / config.height as f32;
         let camera = Camera::new(aspect);
 
-        let terrain_generator = Box::new(terrain_generator::FlatTerrainGenerator::new(world::CHUNK_SIZE));
+        let terrain_generator = Box::new(terrain_generator::PerlinTerrainGenerator::new(
+            world::CHUNK_SIZE,
+            42,
+            0.1,
+            10.0,
+        ));
         let mut world = world::World::new(terrain_generator);
         world.update(camera.position.x, camera.position.z, 4);
 

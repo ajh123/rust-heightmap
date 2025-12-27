@@ -1308,6 +1308,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "parrot-rng"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ebd89b125efe6d4c8a8902118800b5474462e4ac5735044618171ce7c00b140"
+
+[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1491,6 +1497,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "nalgebra",
+ "parrot-rng",
  "tokio",
  "wgpu",
  "winit",
