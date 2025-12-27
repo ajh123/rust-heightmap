@@ -2,6 +2,25 @@
 
 This project is a simple heightmap renderer written in Rust. It renders a basic flat plane split into chunks, using `wgpu` for graphics rendering and `winit` for window management.
 
+## Features
+
+- Renders a flat plane divided into chunks.
+- Utilizes `wgpu` for efficient GPU rendering.
+- Window management with `winit`.
+- Basic camera controls for navigating the scene.
+- Chunk-based terrain generation with support for flat and Perlin noise-based terrains.
+- Modular design for easy extension and modification.
+
+## Next Steps
+
+Future improvements could include:
+- Implementing heightmap loading from image files.
+- Adding lighting and shading effects.
+- Adding texture mapping to the heightmap.
+- Incorporating GUI elements for better user interaction.
+
+### Development timeline
+
 ## First Pass:
 
 The first pass was implemented in two stages:
@@ -13,20 +32,16 @@ This first pass was implemented with the GLM-4.7 assistant on OpenCode in roughl
 ![](./docs/Screenshot%202025-12-27%20123805.png)
 *Screenshot of the heightmap renderer in action.*
 
-## Features
+### Second Pass:
 
-- Renders a flat plane divided into chunks.
-- Utilizes `wgpu` for efficient GPU rendering.
-- Window management with `winit`.
-- Basic camera controls for navigating the scene.
+The second pass focused on enhancing the terrain generation capabilities:
+1. **Terrain Generation**: Implemented a basic terrain generator that creates flat terrain chunks. This involved defining a `TerrainGenerator` trait and a `FlatTerrainGenerator` struct that generates height data for each chunk. *(commit `7b62d9769d9b6b0e52c9bb8c2491b55b3e957471`)*
+2. **Noise-based Terrain**: Added a `PerlinTerrainGenerator` that generates more complex terrain using Perlin noise. This allows for more realistic heightmaps and varied landscapes. *(commit `b15b506a3a0d2dc02e1fc958d3a711ae08b5d7d0`)*
 
-## Next Steps
+This second pass was mostly implemented by hand, with some assistance from the GLM-4.7 model on OpenCode for chunk grid simplification. 
 
-Future improvements could include:
-- Implementing heightmap loading from noise functions or image files.
-- Adding lighting and shading effects.
-- Adding texture mapping to the heightmap.
-- Incorporating GUI elements for better user interaction.
+![](./docs/Screenshot%202025-12-27%20132051.png)
+*Screenshot showcasing the Perlin noise-generated terrain.*
 
 ## License
 
